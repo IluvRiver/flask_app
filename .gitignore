@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Flask
+instance/
+.webassets-cache
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
+
+# Database
+*.db
+*.sqlite3
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Logs
+*.log
+
+# MySQL dumps
+*.sql.backup
+
+# Secrets (중요!)
+secrets.json
+config.json
+
+# Session files
+flask_session/
+
+# Cache
+.cache/

@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+    <div class="text-center">
+        <h1>🚀 Dashboard - Version 1</h1>
+        <h2>Welcome, {{ current_user.username }}!</h2>
+    </div>
+
+<script>
+// 세션 정보를 Local Storage에 저장
+function updateSessionStorage() {
+    fetch('/api/session-info')
+        .then(response => response.json())
+        .then(data => {
+            // Local Storage에 세션 정보 저장
+            localStorage.setItem('flask_session_info', JSON.stringify(data));
+            localStorage.setItem('flask_session_timestamp', new Date().toISOString());
+            
+            alert('🔄 Session data updated in Local Storage!\n\nOpen DevTools > Application > Local Storage to view');
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('❌ Failed to update session data');
+        });
+}
+
+// Local Storage의 세션 데이터 보기
+function viewSessionStorage() {
+    const sessionInfo = localStorage.getItem('flask_session_info');
+    const timestamp = localStorage.getItem('flask_session_timestamp');
+    
+    if (sessionInfo) {
+        const data = JSON.parse(sessionInfo);
+        const message = `🔍 Session Info (Updated: ${timestamp})\n\n` +
+                       `User ID: ${data.user_id}\n` +
+                       `Username: ${data.username}\n` +
+                       `Session ID: ${data.session_id}\n` +
+                       `Authenticated: ${data.is_authenticated}\n` +
+                       `Fresh Login: ${data.fresh_login}\n\n` +
+                       `📊 Check DevTools > Application > Local Storage for full data`;
+        alert(message);
+    } else {
+        alert('⚠️ No session data found.\nClick "Update Session Storage" first.');
+    }
+}
+
+// 자동으로 세션 정보 업데이트 (페이지 로드 시)
+updateSessionStorage();
+
+// 5분마다 자동 업데이트
+setInterval(updateSessionStorage, 5 * 60 * 1000);
+</script>
+    
+    <div class="info-grid">
+        <div class="info-card">
+            <h3>📱 Client IP</h3>
+            <p>{{ client_ip }}</p>
+        </div>
+        <div class="info-card">
+            <h3>🔄 X-Forwarded-For</h3>
+            <p>{{ xff }}</p>
+        </div>
+        <div class="info-card">
+            <h3>🖥️ Server Name</h3>
+            <p>{{ server_name }}</p>
+        </div>
+        <div class="info-card">
+            <h3>🌐 Server IP</h3>
+            <p>{{ server_ip }}</p>
+        </div>
+    </div>
+    
+    <div class="text-center mt-20">
+        <a href="{{ url_for('board') }}" class="btn btn-primary">📝 Go to Board</a>
+        <button onclick="updateSessionStorage()" class="btn btn-secondary">🔄 Update Session Storage</button>
+        <button onclick="viewSessionStorage()" class="btn btn-secondary">🔍 View Session Data</button>
+    </div>
+</div>
+{% endblock %}

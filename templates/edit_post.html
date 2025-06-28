@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+    <h1>✏️ Edit Post</h1>
+    
+    <form action="{{ url_for('edit_post', id=post[0]) }}" method="post">
+        <div class="form-group">
+            <label for="title">📝 Title</label>
+            <input type="text" id="title" name="title" value="{{ post[1] }}" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="content">📄 Content</label>
+            <textarea id="content" name="content" required>{{ post[2] }}</textarea>
+        </div>
+        
+        <div style="display: flex; gap: 10px;">
+            <button type="submit" class="btn btn-primary">💾 Save Changes</button>
+            <a href="{{ url_for('view_post', id=post[0]) }}" class="btn btn-secondary">❌ Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}
