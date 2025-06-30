@@ -20,7 +20,7 @@ def get_secret(project_id, secret_id, version_id="latest"):
 
 # 🔐 시크릿 로드 (프로젝트 ID와 시크릿 이름 설정)
 PROJECT_ID = "hifrodo-05"  # GCP 프로젝트 ID로 변경
-secret = get_secret(PROJECT_ID, "flask-app-config")
+secret = get_secret(PROJECT_ID, "project-secrets")
 
 # Flask 앱 설정
 app = Flask(__name__)
