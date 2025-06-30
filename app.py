@@ -29,7 +29,8 @@ app.secret_key = secret['flask_secret']
 
 # Redis 세션 설정
 app.config['SESSION_TYPE'] = 'redis'
-app.config['SESSION_REDIS'] = redis.StrictRedis(host=secret['redis_host'], port=6379)
+app.config['SESSION_REDIS'] = redis.StrictRedis(host=secret['redis_host'], port=6379,ssl=True,
+    ssl_cert_reqs=None)
 app.config['SESSION_PERMANENT'] = False
 app.config['SESSION_USE_SIGNER'] = True
 app.config['SESSION_KEY_PREFIX'] = 'session:'
