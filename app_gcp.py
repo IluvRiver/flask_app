@@ -13,7 +13,7 @@ from datetime import datetime
 # 🔑 GCP Secret Manager에서 시크릿 불러오기 함수
 def get_secret(project_id, secret_id, version_id="latest"):
     client = secretmanager.SecretManagerServiceClient()
-    name = f"projects/{project_id}/secrets/{secret_id}/versions/{version_id}"
+    name = client.secret_version_path(project_id, secret_id, version_id)
     response = client.access_secret_version(request={"name": name})
     return json.loads(response.payload.data.decode("UTF-8"))
 
