@@ -1,44 +1,46 @@
-from flask import Flask, request, render_template, redirect, url_for, flash, session
+from flask import Flask, request, render_template, redirect, url_for, flash
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_mysqldb import MySQL
 from werkzeug.security import generate_password_hash, check_password_hash
+from flask_session import Session
 import socket
+import redis
+from google.cloud import secretmanager
+import json
 from datetime import datetime
-import os
 
-# .env 파일 로드 (선택적)
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    print("⚠️ python-dotenv를 설치하면 .env 파일을 사용할 수 있습니다: pip install python-dotenv")
+
+# 🔑 GCP Secret Manager에서 시크릿 불러오기 함수
+def get_secret(project_id, secret_id, version_id="latest"):
+    client = secretmanager.SecretManagerServiceClient()
+    name = f"projects/{project_id}/secrets/{secret_id}/versions/{version_id}"
+    response = client.access_secret_version(request={"name": name})
+    return json.loads(response.payload.data.decode("UTF-8"))
+
+
+# 🔐 시크릿 로드 (프로젝트 ID와 시크릿 이름 설정)
+PROJECT_ID = "hifrodo-05"  # GCP 프로젝트 ID로 변경
+secret = get_secret(PROJECT_ID, "flask-app-config")
 
 # Flask 앱 설정
 app = Flask(__name__)
+app.secret_key = secret['flask_secret']
 
-# 로컬 개발용 설정 (AWS 없이 사용 가능)
-app.secret_key = 'your-super-secret-key-change-this'
-
-# 세션 설정
+# Redis 세션 설정
+app.config['SESSION_TYPE'] = 'redis'
+app.config['SESSION_REDIS'] = redis.StrictRedis(host=secret['redis_host'], port=6379)
 app.config['SESSION_PERMANENT'] = False
-app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1시간
+app.config['SESSION_USE_SIGNER'] = True
+app.config['SESSION_KEY_PREFIX'] = 'session:'
+Session(app)
 
-# MySQL 설정 (로컬 개발용)
-app.config['MYSQL_HOST'] = os.getenv('MYSQL_HOST', 'localhost')
-app.config['MYSQL_USER'] = os.getenv('MYSQL_USER', 'root')
-app.config['MYSQL_PASSWORD'] = os.getenv('MYSQL_PASSWORD', '12345678')  # 본인의 MySQL 비밀번호로 변경
-app.config['MYSQL_DB'] = os.getenv('MYSQL_DB', 'flask_board')
+# MySQL 설정
+app.config['MYSQL_HOST'] = secret['mysql_host']
+app.config['MYSQL_USER'] = secret['mysql_user']
+app.config['MYSQL_PASSWORD'] = secret['mysql_password']
+app.config['MYSQL_DB'] = secret['mysql_db']
 
-# MySQL 초기화 및 오류 처리
-try:
-    mysql = MySQL(app)
-except Exception as e:
-    print(f"MySQL 연결 오류: {e}")
-    print("다음을 확인하세요:")
-    print("1. MySQL이 실행 중인지 확인: brew services start mysql")
-    print("2. 비밀번호가 올바른지 확인")
-    print("3. 데이터베이스 'flask_board'가 존재하는지 확인")
-    mysql = None
+mysql = MySQL(app)
 
 # Flask-Login 설정
 login_manager = LoginManager()
@@ -55,17 +57,12 @@ class User(UserMixin):
 # 사용자 로드 함수
 @login_manager.user_loader
 def load_user(user_id):
-    if mysql is None:
-        return None
-    try:
-        cursor = mysql.connection.cursor()
-        cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
-        user = cursor.fetchone()
-        cursor.close()
-        if user:
-            return User(id=user[0], username=user[1], password=user[2])
-    except Exception as e:
-        print(f"User load error: {e}")
+    cursor = mysql.connection.cursor()
+    cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+    user = cursor.fetchone()
+    cursor.close()
+    if user:
+        return User(id=user[0], username=user[1], password=user[2])
     return None
 
 @app.route('/')
@@ -79,15 +76,11 @@ def register():
         password = request.form['password']
         hashed_password = generate_password_hash(password)
         cursor = mysql.connection.cursor()
-        try:
-            cursor.execute("INSERT INTO users (username, password) VALUES (%s, %s)", (username, hashed_password))
-            mysql.connection.commit()
-            cursor.close()
-            flash('Registration successful. Please log in.')
-            return redirect(url_for('login'))
-        except:
-            cursor.close()
-            flash('Username already exists. Please choose a different one.')
+        cursor.execute("INSERT INTO users (username, password) VALUES (%s, %s)", (username, hashed_password))
+        mysql.connection.commit()
+        cursor.close()
+        flash('Registration successful. Please log in.')
+        return redirect(url_for('login'))
     return render_template('register.html')
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -110,10 +103,7 @@ def login():
 def dashboard():
     client_ip = request.remote_addr
     server_name = socket.gethostname()
-    try:
-        server_ip = socket.gethostbyname(server_name)
-    except:
-        server_ip = 'Unknown'
+    server_ip = socket.gethostbyname(server_name)
     xff = request.headers.get('X-Forwarded-For', 'Not Available')
     
     return render_template(
@@ -125,7 +115,6 @@ def dashboard():
         xff=xff
     )
 
-# 게시판 관련 라우트
 @app.route('/board')
 @login_required
 def board():
@@ -227,33 +216,5 @@ def logout():
 def health_check():
     return "OK", 200
 
-# 세션 정보를 JSON으로 반환 (Local Storage용)
-@app.route('/api/session-info')
-@login_required
-def session_info_api():
-    from flask import jsonify
-    import time
-    
-    try:
-        session_data = {
-            'user_id': current_user.id,
-            'username': current_user.username,
-            'session_id': session.get('_id', 'N/A'),
-            'user_session_id': session.get('_user_id', 'N/A'),
-            'fresh_login': session.get('_fresh', False),
-            'is_authenticated': current_user.is_authenticated,
-            'login_timestamp': time.time(),
-            'session_keys': list(session.keys()),
-            'request_info': {
-                'ip': request.remote_addr,
-                'user_agent': str(request.user_agent),
-                'url': request.url
-            }
-        }
-        
-        return jsonify(session_data)
-    except Exception as e:
-        return jsonify({'error': 'Session info unavailable', 'message': str(e)}), 500
-
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=8080)
+    app.run(host='0.0.0.0', port=5000)

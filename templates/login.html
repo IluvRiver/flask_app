@@ -7,6 +7,7 @@
         <p>Please sign in to your account</p>
     </div>
     
+    <!-- 로컬 로그인 -->
     <form action="{{ url_for('login') }}" method="post">
         <div class="form-group">
             <label for="username">Username</label>
@@ -22,6 +23,8 @@
             <button type="submit" class="btn btn-primary" style="width: 100%;">Login</button>
         </div>
     </form>
+    
+
     
     <div class="text-center">
         <p>Don't have an account? <a href="{{ url_for('register') }}" style="color: #667eea;">Register here</a></p>

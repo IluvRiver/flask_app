@@ -1,0 +1,9 @@
+# 로컬 개발용 필수 패키지
+Flask==2.3.3
+Flask-Login==0.6.3
+Flask-MySQLdb==1.0.1
+Werkzeug==2.3.7
+mysqlclient==2.2.0
+
+# 선택적 패키지 (편의성을 위해)
+python-dotenv==1.0.0

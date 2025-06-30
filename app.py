@@ -132,7 +132,7 @@ def board():
     cursor.execute("""
         SELECT p.id, p.title, p.content, p.created_at, u.username 
         FROM posts p 
-        JOIN users u ON p.user_id = u.id 
+        JOIN users u ON p.author_id = u.id 
         ORDER BY p.created_at DESC
     """)
     posts = cursor.fetchall()
@@ -148,7 +148,7 @@ def new_post():
         content = request.form['content']
         cursor = mysql.connection.cursor()
         cursor.execute(
-            "INSERT INTO posts (title, content, user_id, created_at) VALUES (%s, %s, %s, %s)",
+            "INSERT INTO posts (title, content, author_id, created_at) VALUES (%s, %s, %s, %s)",
             (title, content, current_user.id, datetime.now())
         )
         mysql.connection.commit()
@@ -163,9 +163,9 @@ def new_post():
 def view_post(id):
     cursor = mysql.connection.cursor()
     cursor.execute("""
-        SELECT p.id, p.title, p.content, p.created_at, u.username, p.user_id
+        SELECT p.id, p.title, p.content, p.created_at, u.username, p.author_id
         FROM posts p 
-        JOIN users u ON p.user_id = u.id 
+        JOIN users u ON p.author_id = u.id 
         WHERE p.id = %s
     """, (id,))
     post = cursor.fetchone()
@@ -183,7 +183,7 @@ def edit_post(id):
     cursor.execute("SELECT * FROM posts WHERE id = %s", (id,))
     post = cursor.fetchone()
     
-    if not post or post[3] != current_user.id:  # post[3] is user_id
+    if not post or post[5] != current_user.id:  # post[5] is author_id
         flash('You can only edit your own posts.')
         return redirect(url_for('board'))
     
@@ -207,7 +207,7 @@ def edit_post(id):
 @login_required
 def delete_post(id):
     cursor = mysql.connection.cursor()
-    cursor.execute("SELECT user_id FROM posts WHERE id = %s", (id,))
+    cursor.execute("SELECT author_id FROM posts WHERE id = %s", (id,))
     post = cursor.fetchone()
     
     if not post or post[0] != current_user.id:
