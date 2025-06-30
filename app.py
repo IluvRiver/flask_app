@@ -181,10 +181,10 @@ def view_post(id):
 @login_required
 def edit_post(id):
     cursor = mysql.connection.cursor()
-    cursor.execute("SELECT * FROM posts WHERE id = %s", (id,))
+    cursor.execute("SELECT id, title, content, author_id, created_at FROM posts WHERE id = %s", (id,))
     post = cursor.fetchone()
     
-    if not post or post[5] != current_user.id:  # post[5] is author_id
+    if not post or post[3] != current_user.id:  # post[3] is author_id
         flash('You can only edit your own posts.')
         return redirect(url_for('board'))
     
