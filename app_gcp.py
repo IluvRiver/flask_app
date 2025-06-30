@@ -15,12 +15,23 @@ def get_secret(project_id, secret_id, version_id="latest"):
     client = secretmanager.SecretManagerServiceClient()
     name = client.secret_version_path(project_id, secret_id, version_id)
     response = client.access_secret_version(request={"name": name})
-    return json.loads(response.payload.data.decode("UTF-8"))
+    return response.payload.data.decode("UTF-8")
+
+# 각 설정값을 개별적으로 가져오기
+def get_config():
+    PROJECT_ID = "hifrodo-05"
+    return {
+        'flask_secret': get_secret(PROJECT_ID, "flask_secret"),
+        'mysql_db': get_secret(PROJECT_ID, "mysql_db"),
+        'mysql_host': get_secret(PROJECT_ID, "mysql_host"),
+        'mysql_password': get_secret(PROJECT_ID, "mysql_password"),
+        'mysql_user': get_secret(PROJECT_ID, "mysql_user"),
+        'redis_host': get_secret(PROJECT_ID, "redis_host")
+    }
 
 
-# 🔐 시크릿 로드 (프로젝트 ID와 시크릿 이름 설정)
-PROJECT_ID = "hifrodo-05"  # GCP 프로젝트 ID로 변경
-secret = get_secret(PROJECT_ID, "project-secrets")
+# 🔐 시크릿 로드
+secret = get_config()
 
 # Flask 앱 설정
 app = Flask(__name__)
