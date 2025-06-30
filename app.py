@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template, redirect, url_for, flash
+from flask import Flask, request, render_template, redirect, url_for, flash, session
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_mysqldb import MySQL
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -227,6 +227,34 @@ def delete_post(id):
 def logout():
     logout_user()
     return redirect(url_for('login'))
+
+# 세션 정보를 JSON으로 반환 (Local Storage용)
+@app.route('/api/session-info')
+@login_required
+def session_info_api():
+    from flask import jsonify
+    import time
+    
+    try:
+        session_data = {
+            'user_id': current_user.id,
+            'username': current_user.username,
+            'session_id': session.get('_id', 'N/A'),
+            'user_session_id': session.get('_user_id', 'N/A'),
+            'fresh_login': session.get('_fresh', False),
+            'is_authenticated': current_user.is_authenticated,
+            'login_timestamp': time.time(),
+            'session_keys': list(session.keys()),
+            'request_info': {
+                'ip': request.remote_addr,
+                'user_agent': str(request.user_agent),
+                'url': request.url
+            }
+        }
+        
+        return jsonify(session_data)
+    except Exception as e:
+        return jsonify({'error': 'Session info unavailable', 'message': str(e)}), 500
 
 
 @app.route('/healthz')
