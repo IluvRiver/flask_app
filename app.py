@@ -11,7 +11,7 @@ from datetime import datetime
 
 
 # 🔑 AWS Secrets Manager에서 시크릿 불러오기 함수
-def get_secret(secret_name, region_name="ap-northeast-2"):
+def get_secret(secret_name, region_name="us-east-2"):
     session = boto3.session.Session()
     client = session.client('secretsmanager', region_name=region_name)
 
