@@ -28,6 +28,7 @@ class CloudProvider:
         self.aws_available = True
         self.current_provider = PREFERRED_CLOUD
         self.last_health_check = time.time()
+        self.current_config = None
         
     def get_gcp_config(self):
         """GCP Secret Manager에서 설정 로드"""
@@ -56,8 +57,8 @@ class CloudProvider:
         """AWS Secrets Manager에서 설정 로드"""
         try:
             import boto3
-            session = boto3.session.Session()
-            client = session.client('secretsmanager', region_name="us-east-2")
+            session_aws = boto3.session.Session()
+            client = session_aws.client('secretsmanager', region_name="us-east-2")
             response = client.get_secret_value(SecretId='flask/app')
             config = json.loads(response['SecretString'])
             
@@ -77,6 +78,8 @@ class CloudProvider:
     
     def test_database_connection(self, config):
         """데이터베이스 연결 테스트"""
+        if not config:
+            return False
         try:
             import mysql.connector
             connection = mysql.connector.connect(
@@ -94,6 +97,8 @@ class CloudProvider:
     
     def test_redis_connection(self, config):
         """Redis 연결 테스트"""
+        if not config:
+            return False
         try:
             # GCP는 SSL 없이, AWS는 SSL 사용
             if config['provider'] == 'GCP':
@@ -123,6 +128,7 @@ class CloudProvider:
             gcp_config = self.get_gcp_config()
             if gcp_config and self.test_database_connection(gcp_config) and self.test_redis_connection(gcp_config):
                 self.current_provider = 'GCP'
+                self.current_config = gcp_config
                 logger.info("Using GCP configuration")
                 return gcp_config
             else:
@@ -134,6 +140,7 @@ class CloudProvider:
             aws_config = self.get_aws_config()
             if aws_config and self.test_database_connection(aws_config) and self.test_redis_connection(aws_config):
                 self.current_provider = 'AWS'
+                self.current_config = aws_config
                 logger.info("Using AWS configuration")
                 return aws_config
             else:
@@ -142,6 +149,46 @@ class CloudProvider:
         
         # 모든 클라우드 실패
         raise Exception("Both GCP and AWS are unavailable")
+    
+    def switch_provider(self, app_instance, mysql_instance):
+        """프로바이더 전환 로직"""
+        try:
+            new_config = self.get_active_config()
+            if new_config and new_config['provider'] != self.current_config['provider']:
+                logger.info(f"Switching from {self.current_config['provider']} to {new_config['provider']}")
+                
+                # Flask 앱 재설정
+                self.current_config = new_config
+                app_instance.config['MYSQL_HOST'] = new_config['mysql_host']
+                app_instance.config['MYSQL_USER'] = new_config['mysql_user']
+                app_instance.config['MYSQL_PASSWORD'] = new_config['mysql_password']
+                app_instance.config['MYSQL_DB'] = new_config['mysql_db']
+                
+                # Redis 연결 재설정 (클라우드별 SSL 설정)
+                if new_config['provider'] == 'GCP':
+                    app_instance.config['SESSION_REDIS'] = redis.StrictRedis(
+                        host=new_config['redis_host'], 
+                        port=6379
+                    )
+                else:  # AWS
+                    app_instance.config['SESSION_REDIS'] = redis.StrictRedis(
+                        host=new_config['redis_host'], 
+                        port=6379,
+                        ssl=True,
+                        ssl_cert_reqs=None
+                    )
+                
+                # MySQL 연결 재초기화
+                mysql_instance.__init__(app_instance)
+                
+                # 세션 재초기화
+                Session(app_instance)
+                
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Provider switch failed: {e}")
+            return False
 
 # 전역 클라우드 프로바이더 인스턴스
 cloud_provider = CloudProvider()
@@ -201,47 +248,17 @@ class User(UserMixin):
 def health_check_wrapper(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        global cloud_provider, active_config, mysql, app
-        
         # 30초마다 헬스체크 수행
         current_time = time.time()
         if current_time - cloud_provider.last_health_check > 30:
             try:
                 # 현재 설정으로 연결 테스트
-                if not cloud_provider.test_database_connection(active_config):
-                    logger.warning(f"Current {active_config['provider']} database connection failed, attempting failover")
+                if not cloud_provider.test_database_connection(cloud_provider.current_config):
+                    logger.warning(f"Current {cloud_provider.current_config['provider']} database connection failed, attempting failover")
                     
-                    # 대체 설정으로 전환
-                    new_config = cloud_provider.get_active_config()
-                    if new_config['provider'] != active_config['provider']:
-                        logger.info(f"Switching from {active_config['provider']} to {new_config['provider']}")
-                        
-                        # Flask 앱 재설정
-                        active_config = new_config
-                        app.config['MYSQL_HOST'] = active_config['mysql_host']
-                        app.config['MYSQL_USER'] = active_config['mysql_user']
-                        app.config['MYSQL_PASSWORD'] = active_config['mysql_password']
-                        app.config['MYSQL_DB'] = active_config['mysql_db']
-                        
-                        # Redis 연결 재설정 (클라우드별 SSL 설정)
-                        if active_config['provider'] == 'GCP':
-                            app.config['SESSION_REDIS'] = redis.StrictRedis(
-                                host=active_config['redis_host'], 
-                                port=6379
-                            )
-                        else:  # AWS
-                            app.config['SESSION_REDIS'] = redis.StrictRedis(
-                                host=active_config['redis_host'], 
-                                port=6379,
-                                ssl=True,
-                                ssl_cert_reqs=None
-                            )
-                        
-                        # MySQL 연결 재초기화
-                        mysql = MySQL(app)
-                        
-                        # 세션 재초기화
-                        Session(app)
+                    # 프로바이더 전환 시도
+                    if cloud_provider.switch_provider(app, mysql):
+                        flash(f'Switched to {cloud_provider.current_provider} due to connection issues', 'info')
                         
                 cloud_provider.last_health_check = current_time
                 
@@ -253,14 +270,13 @@ def health_check_wrapper(f):
         except Exception as e:
             logger.error(f"Route execution failed: {e}")
             # 데이터베이스 오류인 경우 대체 설정 시도
-            if "database" in str(e).lower() or "mysql" in str(e).lower():
+            if any(keyword in str(e).lower() for keyword in ["database", "mysql", "connection", "redis"]):
                 try:
-                    new_config = cloud_provider.get_active_config()
-                    if new_config['provider'] != active_config['provider']:
-                        flash(f'Switched to {new_config["provider"]} due to connection issues')
+                    if cloud_provider.switch_provider(app, mysql):
+                        flash(f'Switched to {cloud_provider.current_provider} due to connection issues', 'warning')
                         return redirect(request.url)
-                except:
-                    pass
+                except Exception as switch_error:
+                    logger.error(f"Emergency failover failed: {switch_error}")
             raise e
     
     return decorated_function
@@ -291,13 +307,28 @@ def register():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
-        hashed_password = generate_password_hash(password)
-        cursor = mysql.connection.cursor()
-        cursor.execute("INSERT INTO users (username, password) VALUES (%s, %s)", (username, hashed_password))
-        mysql.connection.commit()
-        cursor.close()
-        flash('Registration successful. Please log in.')
-        return redirect(url_for('login'))
+        
+        # 입력 검증
+        if not username or not password:
+            flash('Username and password are required.', 'error')
+            return render_template('register.html')
+        
+        if len(password) < 6:
+            flash('Password must be at least 6 characters long.', 'error')
+            return render_template('register.html')
+        
+        try:
+            hashed_password = generate_password_hash(password)
+            cursor = mysql.connection.cursor()
+            cursor.execute("INSERT INTO users (username, password) VALUES (%s, %s)", (username, hashed_password))
+            mysql.connection.commit()
+            cursor.close()
+            flash('Registration successful. Please log in.', 'success')
+            return redirect(url_for('login'))
+        except Exception as e:
+            logger.error(f"Registration failed: {e}")
+            flash('Registration failed. Username may already exist.', 'error')
+    
     return render_template('register.html')
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -306,14 +337,27 @@ def login():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
-        cursor = mysql.connection.cursor()
-        cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
-        user = cursor.fetchone()
-        cursor.close()
-        if user and check_password_hash(user[2], password):
-            login_user(User(id=user[0], username=user[1], password=user[2]))
-            return redirect(url_for('dashboard'))
-        flash('Invalid username or password.')
+        
+        if not username or not password:
+            flash('Username and password are required.', 'error')
+            return render_template('login.html')
+        
+        try:
+            cursor = mysql.connection.cursor()
+            cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+            user = cursor.fetchone()
+            cursor.close()
+            
+            if user and check_password_hash(user[2], password):
+                login_user(User(id=user[0], username=user[1], password=user[2]))
+                next_page = request.args.get('next')
+                return redirect(next_page or url_for('dashboard'))
+            else:
+                flash('Invalid username or password.', 'error')
+        except Exception as e:
+            logger.error(f"Login failed: {e}")
+            flash('Login failed due to system error.', 'error')
+    
     return render_template('login.html')
 
 @app.route('/dashboard')
@@ -322,7 +366,10 @@ def login():
 def dashboard():
     client_ip = request.remote_addr
     server_name = socket.gethostname()
-    server_ip = socket.gethostbyname(server_name)
+    try:
+        server_ip = socket.gethostbyname(server_name)
+    except Exception:
+        server_ip = 'Unknown'
     xff = request.headers.get('X-Forwarded-For', 'Not Available')
     
     return render_template(
@@ -341,16 +388,21 @@ def dashboard():
 @login_required
 @health_check_wrapper
 def board():
-    cursor = mysql.connection.cursor()
-    cursor.execute("""
-        SELECT p.id, p.title, p.content, p.created_at, u.username 
-        FROM posts p 
-        JOIN users u ON p.author_id = u.id 
-        ORDER BY p.created_at DESC
-    """)
-    posts = cursor.fetchall()
-    cursor.close()
-    return render_template('board.html', posts=posts)
+    try:
+        cursor = mysql.connection.cursor()
+        cursor.execute("""
+            SELECT p.id, p.title, p.content, p.created_at, u.username 
+            FROM posts p 
+            JOIN users u ON p.author_id = u.id 
+            ORDER BY p.created_at DESC
+        """)
+        posts = cursor.fetchall()
+        cursor.close()
+        return render_template('board.html', posts=posts)
+    except Exception as e:
+        logger.error(f"Board loading failed: {e}")
+        flash('Failed to load posts.', 'error')
+        return render_template('board.html', posts=[])
 
 @app.route('/post/new', methods=['GET', 'POST'])
 @login_required
@@ -359,84 +411,117 @@ def new_post():
     if request.method == 'POST':
         title = request.form['title']
         content = request.form['content']
-        cursor = mysql.connection.cursor()
-        cursor.execute(
-            "INSERT INTO posts (title, content, author_id, created_at) VALUES (%s, %s, %s, %s)",
-            (title, content, current_user.id, datetime.now())
-        )
-        mysql.connection.commit()
-        cursor.close()
-        flash('Post created successfully!')
-        return redirect(url_for('board'))
+        
+        if not title or not content:
+            flash('Title and content are required.', 'error')
+            return render_template('new_post.html')
+        
+        try:
+            cursor = mysql.connection.cursor()
+            cursor.execute(
+                "INSERT INTO posts (title, content, author_id, created_at) VALUES (%s, %s, %s, %s)",
+                (title, content, current_user.id, datetime.now())
+            )
+            mysql.connection.commit()
+            cursor.close()
+            flash('Post created successfully!', 'success')
+            return redirect(url_for('board'))
+        except Exception as e:
+            logger.error(f"Post creation failed: {e}")
+            flash('Failed to create post.', 'error')
+    
     return render_template('new_post.html')
 
 @app.route('/post/<int:id>')
 @login_required
 @health_check_wrapper
 def view_post(id):
-    cursor = mysql.connection.cursor()
-    cursor.execute("""
-        SELECT p.id, p.title, p.content, p.created_at, u.username, p.author_id
-        FROM posts p 
-        JOIN users u ON p.author_id = u.id 
-        WHERE p.id = %s
-    """, (id,))
-    post = cursor.fetchone()
-    cursor.close()
-    if not post:
-        flash('Post not found.')
+    try:
+        cursor = mysql.connection.cursor()
+        cursor.execute("""
+            SELECT p.id, p.title, p.content, p.created_at, u.username, p.author_id
+            FROM posts p 
+            JOIN users u ON p.author_id = u.id 
+            WHERE p.id = %s
+        """, (id,))
+        post = cursor.fetchone()
+        cursor.close()
+        
+        if not post:
+            flash('Post not found.', 'error')
+            return redirect(url_for('board'))
+        
+        return render_template('view_post.html', post=post)
+    except Exception as e:
+        logger.error(f"Post viewing failed: {e}")
+        flash('Failed to load post.', 'error')
         return redirect(url_for('board'))
-    return render_template('view_post.html', post=post)
 
 @app.route('/post/<int:id>/edit', methods=['GET', 'POST'])
 @login_required
 @health_check_wrapper
 def edit_post(id):
-    cursor = mysql.connection.cursor()
-    cursor.execute("SELECT id, title, content, author_id, created_at FROM posts WHERE id = %s", (id,))
-    post = cursor.fetchone()
-    
-    if not post or post[3] != current_user.id:
-        flash('You can only edit your own posts.')
-        return redirect(url_for('board'))
-    
-    if request.method == 'POST':
-        title = request.form['title']
-        content = request.form['content']
-        cursor.execute(
-            "UPDATE posts SET title = %s, content = %s WHERE id = %s",
-            (title, content, id)
-        )
-        mysql.connection.commit()
+    try:
+        cursor = mysql.connection.cursor()
+        cursor.execute("SELECT id, title, content, author_id, created_at FROM posts WHERE id = %s", (id,))
+        post = cursor.fetchone()
+        
+        if not post or post[3] != current_user.id:
+            flash('You can only edit your own posts.', 'error')
+            return redirect(url_for('board'))
+        
+        if request.method == 'POST':
+            title = request.form['title']
+            content = request.form['content']
+            
+            if not title or not content:
+                flash('Title and content are required.', 'error')
+                return render_template('edit_post.html', post=post)
+            
+            cursor.execute(
+                "UPDATE posts SET title = %s, content = %s WHERE id = %s",
+                (title, content, id)
+            )
+            mysql.connection.commit()
+            cursor.close()
+            flash('Post updated successfully!', 'success')
+            return redirect(url_for('view_post', id=id))
+        
         cursor.close()
-        flash('Post updated successfully!')
-        return redirect(url_for('view_post', id=id))
-    
-    cursor.close()
-    return render_template('edit_post.html', post=post)
+        return render_template('edit_post.html', post=post)
+    except Exception as e:
+        logger.error(f"Post editing failed: {e}")
+        flash('Failed to edit post.', 'error')
+        return redirect(url_for('board'))
 
 @app.route('/post/<int:id>/delete', methods=['POST'])
 @login_required
 @health_check_wrapper
 def delete_post(id):
-    cursor = mysql.connection.cursor()
-    cursor.execute("SELECT author_id FROM posts WHERE id = %s", (id,))
-    post = cursor.fetchone()
-    
-    if not post or post[0] != current_user.id:
-        flash('You can only delete your own posts.')
+    try:
+        cursor = mysql.connection.cursor()
+        cursor.execute("SELECT author_id FROM posts WHERE id = %s", (id,))
+        post = cursor.fetchone()
+        
+        if not post or post[0] != current_user.id:
+            flash('You can only delete your own posts.', 'error')
+            return redirect(url_for('board'))
+        
+        cursor.execute("DELETE FROM posts WHERE id = %s", (id,))
+        mysql.connection.commit()
+        cursor.close()
+        flash('Post deleted successfully!', 'success')
         return redirect(url_for('board'))
-    
-    cursor.execute("DELETE FROM posts WHERE id = %s", (id,))
-    mysql.connection.commit()
-    cursor.close()
-    flash('Post deleted successfully!')
-    return redirect(url_for('board'))
+    except Exception as e:
+        logger.error(f"Post deletion failed: {e}")
+        flash('Failed to delete post.', 'error')
+        return redirect(url_for('board'))
 
 @app.route('/logout')
 @login_required
 def logout():
     logout_user()
+    flash('You have been logged out.', 'info')
     return redirect(url_for('login'))
 
 @app.route('/api/session-info')
@@ -509,7 +594,7 @@ def background_health_check():
     """백그라운드에서 주기적으로 헬스체크 수행"""
     while True:
         try:
-            time.sleep(30)  # 30초마다 체크
+            time.sleep(60)  # 60초마다 체크 (부하 감소)
             cloud_provider.get_active_config()
         except Exception as e:
             logger.error(f"Background health check failed: {e}")
@@ -517,6 +602,16 @@ def background_health_check():
 # 백그라운드 헬스체크 스레드 시작
 health_thread = threading.Thread(target=background_health_check, daemon=True)
 health_thread.start()
+
+# 애플리케이션 에러 핸들러
+@app.errorhandler(404)
+def not_found_error(error):
+    return render_template('404.html'), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    logger.error(f"Internal server error: {error}")
+    return render_template('500.html'), 500
 
 if __name__ == '__main__':
     logger.info(f"Starting Flask app with {cloud_provider.current_provider} configuration")
