@@ -1,0 +1,12 @@
+# 임시 Redis 우회 설정을 위한 패치
+
+# app_dr.py에서 Redis 세션 설정 부분을 다음으로 교체:
+
+# Redis 세션 설정 (임시로 파일 기반으로 변경)
+app.config['SESSION_TYPE'] = 'filesystem'
+app.config['SESSION_PERMANENT'] = False
+app.config['SESSION_USE_SIGNER'] = True
+app.config['SESSION_KEY_PREFIX'] = 'session:'
+app.config['SESSION_FILE_DIR'] = '/tmp/flask_sessions'
+
+# Redis 관련 코드를 주석 처리하고 위 설정 사용

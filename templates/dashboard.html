@@ -3,12 +3,25 @@
 {% block content %}
 <div class="card">
     <div class="text-center">
-        <h1>🚀 Dashboard - Version 1</h1>
+        <h1>🌐 Multi-Cloud Dashboard - DR Version</h1>
         <h2>Welcome, {{ current_user.username }}!</h2>
+        <div class="dr-status">
+            <span class="version-badge">DR Version 2.0</span>
+        </div>
+    </div>
+
+    <!-- DR Status Section -->
+    <div class="dr-info">
+        <h3>🔄 Disaster Recovery Status</h3>
+        <div class="status-info">
+            <p><strong>현재 시스템:</strong> GCP 기본, AWS 자동 백업</p>
+            <p><strong>복구 목표:</strong> RTO < 30초, RPO < 1분</p>
+            <p><strong>상태:</strong> <span class="status-active">🟢 정상 운영 중</span></p>
+        </div>
     </div>
 
 <script>
-// 세션 정보를 Local Storage에 저장
+// 세션 정보를 Local Storage에 저장 (DR 정보 포함)
 function updateSessionStorage() {
     fetch('/api/session-info')
         .then(response => response.json())
@@ -17,7 +30,17 @@ function updateSessionStorage() {
             localStorage.setItem('flask_session_info', JSON.stringify(data));
             localStorage.setItem('flask_session_timestamp', new Date().toISOString());
             
-            alert('🔄 Session data updated in Local Storage!\n\nOpen DevTools > Application > Local Storage to view');
+            // DR 상태도 저장
+            if (data.cloud_provider) {
+                localStorage.setItem('dr_status', JSON.stringify({
+                    current_provider: data.cloud_provider.current,
+                    gcp_available: data.cloud_provider.gcp_available,
+                    aws_available: data.cloud_provider.aws_available,
+                    timestamp: new Date().toISOString()
+                }));
+            }
+            
+            alert('🔄 Session data & DR status updated!\n\nOpen DevTools > Application > Local Storage to view');
         })
         .catch(error => {
             console.error('Error:', error);
@@ -25,24 +48,70 @@ function updateSessionStorage() {
         });
 }
 
+// Cloud Status 확인
+function checkCloudStatus() {
+    fetch('/api/cloud-status')
+        .then(response => response.json())
+        .then(data => {
+            const message = `☁️ Cloud Provider Status\n\n` +
+                           `Current Provider: ${data.current_provider}\n` +
+                           `GCP Available: ${data.gcp_available ? '🟢 Online' : '🔴 Offline'}\n` +
+                           `AWS Available: ${data.aws_available ? '🟢 Online' : '🔴 Offline'}\n` +
+                           `Last Check: ${new Date(data.last_health_check * 1000).toLocaleString()}`;
+            alert(message);
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('❌ Failed to check cloud status');
+        });
+}
+
 // Local Storage의 세션 데이터 보기
 function viewSessionStorage() {
     const sessionInfo = localStorage.getItem('flask_session_info');
+    const drStatus = localStorage.getItem('dr_status');
     const timestamp = localStorage.getItem('flask_session_timestamp');
     
     if (sessionInfo) {
         const data = JSON.parse(sessionInfo);
-        const message = `🔍 Session Info (Updated: ${timestamp})\n\n` +
-                       `User ID: ${data.user_id}\n` +
-                       `Username: ${data.username}\n` +
-                       `Session ID: ${data.session_id}\n` +
-                       `Authenticated: ${data.is_authenticated}\n` +
-                       `Fresh Login: ${data.fresh_login}\n\n` +
-                       `📊 Check DevTools > Application > Local Storage for full data`;
+        const dr = drStatus ? JSON.parse(drStatus) : null;
+        
+        let message = `🔍 Session Info (Updated: ${timestamp})\n\n` +
+                     `User ID: ${data.user_id}\n` +
+                     `Username: ${data.username}\n` +
+                     `Session ID: ${data.session_id}\n` +
+                     `Authenticated: ${data.is_authenticated}\n` +
+                     `Fresh Login: ${data.fresh_login}\n\n`;
+        
+        if (dr) {
+            message += `☁️ DR Status:\n` +
+                      `Current Provider: ${dr.current_provider}\n` +
+                      `GCP: ${dr.gcp_available ? 'Online' : 'Offline'}\n` +
+                      `AWS: ${dr.aws_available ? 'Online' : 'Offline'}\n\n`;
+        }
+        
+        message += `📊 Check DevTools > Application > Local Storage for full data`;
         alert(message);
     } else {
         alert('⚠️ No session data found.\nClick "Update Session Storage" first.');
     }
+}
+
+// Health Check
+function performHealthCheck() {
+    fetch('/healthz')
+        .then(response => response.json())
+        .then(data => {
+            const message = `❤️ Health Check Result\n\n` +
+                           `Status: ${data.status}\n` +
+                           `Provider: ${data.provider}\n` +
+                           `Timestamp: ${new Date(data.timestamp * 1000).toLocaleString()}`;
+            alert(message);
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('❌ Health check failed');
+        });
 }
 
 // 자동으로 세션 정보 업데이트 (페이지 로드 시)
@@ -50,6 +119,9 @@ updateSessionStorage();
 
 // 5분마다 자동 업데이트
 setInterval(updateSessionStorage, 5 * 60 * 1000);
+
+// 2분마다 클라우드 상태 체크
+setInterval(checkCloudStatus, 2 * 60 * 1000);
 </script>
     
     <div class="info-grid">
@@ -75,6 +147,52 @@ setInterval(updateSessionStorage, 5 * 60 * 1000);
         <a href="{{ url_for('board') }}" class="btn btn-primary">📝 Go to Board</a>
         <button onclick="updateSessionStorage()" class="btn btn-secondary">🔄 Update Session Storage</button>
         <button onclick="viewSessionStorage()" class="btn btn-secondary">🔍 View Session Data</button>
+        <button onclick="checkCloudStatus()" class="btn btn-info">☁️ Cloud Status</button>
+        <button onclick="performHealthCheck()" class="btn btn-success">❤️ Health Check</button>
     </div>
 </div>
+
+<style>
+.dr-status {
+    margin: 10px 0;
+}
+
+.version-badge {
+    background: #17a2b8;
+    color: white;
+    padding: 5px 10px;
+    border-radius: 15px;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+.dr-info {
+    background: #f8f9fa;
+    padding: 20px;
+    border-radius: 10px;
+    margin: 20px 0;
+    border-left: 4px solid #007bff;
+}
+
+.status-info {
+    margin: 10px 0;
+}
+
+.status-active {
+    color: #28a745;
+    font-weight: bold;
+}
+
+.btn-info {
+    background-color: #17a2b8;
+    color: white;
+    margin: 2px;
+}
+
+.btn-success {
+    background-color: #28a745;
+    color: white;
+    margin: 2px;
+}
+</style>
 {% endblock %}

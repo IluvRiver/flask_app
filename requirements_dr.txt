@@ -1,0 +1,17 @@
+# Multi-Cloud DR 애플리케이션용 패키지
+Flask==2.3.3
+Flask-Login==0.6.3
+Flask-MySQLdb==1.0.1
+Flask-Session==0.5.0
+Werkzeug==2.3.7
+redis==5.0.1
+mysqlclient==2.2.0
+
+# GCP Secret Manager
+google-cloud-secret-manager==2.16.4
+
+# AWS SDK (새로 추가)
+boto3==1.28.57
+
+# MySQL 커넥터 (헬스체크용, 새로 추가)
+mysql-connector-python==8.1.0
