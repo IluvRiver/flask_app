@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card text-center">
+    <h1>⚠️ 500 - Internal Server Error</h1>
+    <p>Something went wrong on our end. Please try again later.</p>
+    <div class="mt-20">
+        <a href="{{ url_for('index') }}" class="btn btn-primary">🏠 Go Home</a>
+        <a href="{{ url_for('login') }}" class="btn btn-secondary">🔑 Login</a>
+    </div>
+</div>
+{% endblock %}
