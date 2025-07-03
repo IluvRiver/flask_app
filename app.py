@@ -444,6 +444,14 @@ def dashboard():
         server_ip = 'Unknown'
     xff = request.headers.get('X-Forwarded-For', 'Not Available')
     
+    # 현재 사용 중인 클라우드가 아닌 것은 Standby로 표시
+    if cloud_provider.current_provider == 'GCP':
+        gcp_status = '🟢 Online (Active)'
+        aws_status = '🟡 Standby'
+    else:  # AWS
+        gcp_status = '🔴 Offline' if not cloud_provider.gcp_available else '🟡 Standby'
+        aws_status = '🟢 Online (Active)'
+    
     return render_template(
         'dashboard_dr.html',
         current_user=current_user,
@@ -452,8 +460,8 @@ def dashboard():
         server_ip=server_ip,
         xff=xff,
         current_provider=cloud_provider.current_provider,
-        gcp_status='🟢 Online' if cloud_provider.gcp_available else '🔴 Offline',
-        aws_status='🟢 Online' if cloud_provider.aws_available else '🔴 Offline'
+        gcp_status=gcp_status,
+        aws_status=aws_status
     )
 
 @app.route('/board')
@@ -634,10 +642,18 @@ def cloud_status_api():
     """클라우드 제공업체 상태 API"""
     from flask import jsonify
     
+    # 현재 사용 중인 클라우드가 아닌 것은 대기 상태로 표시
+    if cloud_provider.current_provider == 'GCP':
+        gcp_available = True   # 현재 사용 중
+        aws_available = 'standby'  # 대기 상태
+    else:  # AWS
+        gcp_available = False if not cloud_provider.gcp_available else 'standby'
+        aws_available = True   # 현재 사용 중
+    
     return jsonify({
         'current_provider': cloud_provider.current_provider,
-        'gcp_available': cloud_provider.gcp_available,
-        'aws_available': cloud_provider.aws_available,
+        'gcp_available': gcp_available,
+        'aws_available': aws_available,
         'last_health_check': cloud_provider.last_health_check,
         'timestamp': time.time()
     })
