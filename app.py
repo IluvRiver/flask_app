@@ -96,7 +96,7 @@ class CloudProvider:
                 user=config['mysql_user'],
                 password=config['mysql_password'],
                 database=config['mysql_db'],
-                connect_timeout=5
+                connect_timeout=3  # 5초에서 3초로 단축
             )
             connection.close()
             return True
@@ -114,7 +114,7 @@ class CloudProvider:
                 r = redis.StrictRedis(
                     host=config['redis_host'], 
                     port=6379,
-                    socket_connect_timeout=5
+                    socket_connect_timeout=3  # 5초에서 3초로 단축
                 )
             else:  # AWS
                 r = redis.StrictRedis(
@@ -131,59 +131,34 @@ class CloudProvider:
             return False
     
     def get_active_config(self):
-        """활성 설정 반환 (AWS 환경에서는 AWS 우선)"""
+        """활성 설정 반환 (v6 방식으로 단순화)"""
         
-        # AWS 환경에서 실행 중인지 감지 (환경 변수 또는 메타데이터로 확인)
-        running_on_aws = self._detect_aws_environment()
+        # GCP 우선 시도 (원래 v6 로직)
+        if PREFERRED_CLOUD == 'GCP' and self.gcp_available:
+            gcp_config = self.get_gcp_config()
+            if gcp_config and self.test_database_connection(gcp_config) and self.test_redis_connection(gcp_config):
+                self.current_provider = 'GCP'
+                self.current_config = gcp_config
+                logger.info("Using GCP configuration")
+                return gcp_config
+            else:
+                logger.warning("GCP health check failed, falling back to AWS")
+                self.gcp_available = False
         
-        if running_on_aws:
-            logger.info("Detected AWS environment, prioritizing AWS configuration")
-            # AWS 환경에서는 AWS만 시도 (GCP는 standby로 표시)
-            if self.aws_available:
-                aws_config = self.get_aws_config()
-                if aws_config and self.test_database_connection(aws_config) and self.test_redis_connection(aws_config):
-                    self.current_provider = 'AWS'
-                    self.current_config = aws_config
-                    self.gcp_available = False  # GCP를 standby 상태로 설정
-                    logger.info("Using AWS configuration")
-                    return aws_config
-                else:
-                    logger.error("AWS configuration failed")
-                    self.aws_available = False
-            
-            # AWS 실패 시 GCP 시도하지 않음 (라이브러리 없음)
-            raise Exception("AWS configuration unavailable in AWS environment")
+        # AWS 대체 시도
+        if self.aws_available:
+            aws_config = self.get_aws_config()
+            if aws_config and self.test_database_connection(aws_config) and self.test_redis_connection(aws_config):
+                self.current_provider = 'AWS'
+                self.current_config = aws_config
+                logger.info("Using AWS configuration")
+                return aws_config
+            else:
+                logger.error("AWS health check also failed")
+                self.aws_available = False
         
-        else:
-            logger.info("Detected GCP environment, prioritizing GCP configuration")
-            # GCP 환경에서는 GCP 우선, AWS는 standby
-            if PREFERRED_CLOUD == 'GCP' and self.gcp_available:
-                gcp_config = self.get_gcp_config()
-                if gcp_config and self.test_database_connection(gcp_config) and self.test_redis_connection(gcp_config):
-                    self.current_provider = 'GCP'
-                    self.current_config = gcp_config
-                    # AWS를 standby 상태로 설정 (연결 테스트하지 않음)
-                    self.aws_available = True  # 대기 상태로 표시
-                    logger.info("Using GCP configuration")
-                    return gcp_config
-                else:
-                    logger.warning("GCP health check failed, falling back to AWS")
-                    self.gcp_available = False
-            
-            # GCP 실패 시에만 AWS 대체 시도
-            if self.aws_available:
-                aws_config = self.get_aws_config()
-                if aws_config and self.test_database_connection(aws_config) and self.test_redis_connection(aws_config):
-                    self.current_provider = 'AWS'
-                    self.current_config = aws_config
-                    logger.info("Using AWS configuration (FAILOVER)")
-                    return aws_config
-                else:
-                    logger.error("AWS health check also failed")
-                    self.aws_available = False
-            
-            # 모든 클라우드 실패
-            raise Exception("Both GCP and AWS are unavailable")
+        # 모든 클라우드 실패
+        raise Exception("Both GCP and AWS are unavailable")
     
     def _detect_aws_environment(self):
         """AWS 환경에서 실행 중인지 감지"""
@@ -320,9 +295,9 @@ class User(UserMixin):
 def health_check_wrapper(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        # 30초마다 헬스체크 수행
+        # 300초(5분)마다 헬스체크 수행 (빈도 대폭 줄임)
         current_time = time.time()
-        if current_time - cloud_provider.last_health_check > 30:
+        if current_time - cloud_provider.last_health_check > 300:
             try:
                 # 현재 설정으로 연결 테스트
                 if not cloud_provider.test_database_connection(cloud_provider.current_config):
@@ -444,13 +419,11 @@ def dashboard():
         server_ip = 'Unknown'
     xff = request.headers.get('X-Forwarded-For', 'Not Available')
     
-    # 현재 사용 중인 클라우드가 아닌 것은 Standby로 표시
+    # 현재 사용 중인 클라우드에 따라 표시
     if cloud_provider.current_provider == 'GCP':
-        gcp_status = '🟢 Online (Active)'
-        aws_status = '🟡 Standby'
-    else:  # AWS
-        gcp_status = '🔴 Offline' if not cloud_provider.gcp_available else '🟡 Standby'
-        aws_status = '🟢 Online (Active)'
+        aws_status = '🟡 Standby'  # GCP 환경에서는 AWS 노란불
+    else:
+        aws_status = '🟢 Online'   # AWS 환경에서는 AWS 초록불
     
     return render_template(
         'dashboard_dr.html',
@@ -460,7 +433,7 @@ def dashboard():
         server_ip=server_ip,
         xff=xff,
         current_provider=cloud_provider.current_provider,
-        gcp_status=gcp_status,
+        gcp_status='🟢 Online' if cloud_provider.gcp_available else '🔴 Offline',
         aws_status=aws_status
     )
 
@@ -682,14 +655,14 @@ def background_health_check():
     """백그라운드에서 주기적으로 헬스체크 수행"""
     while True:
         try:
-            time.sleep(60)  # 60초마다 체크 (부하 감소)
+            time.sleep(120)  # 120초마다 체크 (부하 감소)
             cloud_provider.get_active_config()
         except Exception as e:
             logger.error(f"Background health check failed: {e}")
 
-# 백그라운드 헬스체크 스레드 시작
-health_thread = threading.Thread(target=background_health_check, daemon=True)
-health_thread.start()
+# 백그라운드 헬스체크 스레드 시작 (임시 비활성화)
+# health_thread = threading.Thread(target=background_health_check, daemon=True)
+# health_thread.start()
 
 # 애플리케이션 에러 핸들러
 @app.errorhandler(404)
