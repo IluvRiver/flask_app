@@ -33,6 +33,7 @@ class CloudProvider:
     def get_gcp_config(self):
         """GCP Secret Manager에서 설정 로드"""
         try:
+            # import를 try 블록 안에서 수행하여 AWS 환경에서 오류 방지
             from google.cloud import secretmanager
             client = secretmanager.SecretManagerServiceClient()
             name = client.secret_version_path("hifrodo-05", "project-secrets", "latest")
@@ -48,6 +49,10 @@ class CloudProvider:
                 'mysql_db': config['mysql_db'],
                 'provider': 'GCP'
             }
+        except ImportError as ie:
+            logger.warning(f"GCP library not available (running on AWS?): {ie}")
+            self.gcp_available = False
+            return None
         except Exception as e:
             logger.error(f"GCP config load failed: {e}")
             self.gcp_available = False
@@ -71,6 +76,10 @@ class CloudProvider:
                 'mysql_db': config['dbname'],
                 'provider': 'AWS'
             }
+        except ImportError as ie:
+            logger.warning(f"AWS library not available (running on GCP?): {ie}")
+            self.aws_available = False
+            return None
         except Exception as e:
             logger.error(f"AWS config load failed: {e}")
             self.aws_available = False
@@ -122,33 +131,80 @@ class CloudProvider:
             return False
     
     def get_active_config(self):
-        """활성 설정 반환 (우선순위: GCP -> AWS)"""
-        # GCP 우선 시도
-        if PREFERRED_CLOUD == 'GCP' and self.gcp_available:
-            gcp_config = self.get_gcp_config()
-            if gcp_config and self.test_database_connection(gcp_config) and self.test_redis_connection(gcp_config):
-                self.current_provider = 'GCP'
-                self.current_config = gcp_config
-                logger.info("Using GCP configuration")
-                return gcp_config
-            else:
-                logger.warning("GCP health check failed, falling back to AWS")
-                self.gcp_available = False
+        """활성 설정 반환 (AWS 환경에서는 AWS 우선)"""
         
-        # AWS 대체 시도
-        if self.aws_available:
-            aws_config = self.get_aws_config()
-            if aws_config and self.test_database_connection(aws_config) and self.test_redis_connection(aws_config):
-                self.current_provider = 'AWS'
-                self.current_config = aws_config
-                logger.info("Using AWS configuration")
-                return aws_config
-            else:
-                logger.error("AWS health check also failed")
-                self.aws_available = False
+        # AWS 환경에서 실행 중인지 감지 (환경 변수 또는 메타데이터로 확인)
+        running_on_aws = self._detect_aws_environment()
         
-        # 모든 클라우드 실패
-        raise Exception("Both GCP and AWS are unavailable")
+        if running_on_aws:
+            logger.info("Detected AWS environment, prioritizing AWS configuration")
+            # AWS 환경에서는 AWS 우선
+            if self.aws_available:
+                aws_config = self.get_aws_config()
+                if aws_config and self.test_database_connection(aws_config) and self.test_redis_connection(aws_config):
+                    self.current_provider = 'AWS'
+                    self.current_config = aws_config
+                    logger.info("Using AWS configuration")
+                    return aws_config
+                else:
+                    logger.error("AWS configuration failed")
+                    self.aws_available = False
+            
+            # AWS 실패 시 GCP 시도하지 않음 (라이브러리 없음)
+            raise Exception("AWS configuration unavailable in AWS environment")
+        
+        else:
+            logger.info("Detected GCP environment, prioritizing GCP configuration")
+            # GCP 환경에서는 원래 로직대로
+            if PREFERRED_CLOUD == 'GCP' and self.gcp_available:
+                gcp_config = self.get_gcp_config()
+                if gcp_config and self.test_database_connection(gcp_config) and self.test_redis_connection(gcp_config):
+                    self.current_provider = 'GCP'
+                    self.current_config = gcp_config
+                    logger.info("Using GCP configuration")
+                    return gcp_config
+                else:
+                    logger.warning("GCP health check failed, falling back to AWS")
+                    self.gcp_available = False
+            
+            # AWS 대체 시도
+            if self.aws_available:
+                aws_config = self.get_aws_config()
+                if aws_config and self.test_database_connection(aws_config) and self.test_redis_connection(aws_config):
+                    self.current_provider = 'AWS'
+                    self.current_config = aws_config
+                    logger.info("Using AWS configuration")
+                    return aws_config
+                else:
+                    logger.error("AWS health check also failed")
+                    self.aws_available = False
+            
+            # 모든 클라우드 실패
+            raise Exception("Both GCP and AWS are unavailable")
+    
+    def _detect_aws_environment(self):
+        """AWS 환경에서 실행 중인지 감지"""
+        # 방법 1: 환경 변수 확인
+        if os.getenv('AWS_REGION') or os.getenv('AWS_DEFAULT_REGION'):
+            return True
+        
+        # 방법 2: EC2 메타데이터 확인 (간단한 방법)
+        try:
+            import urllib.request
+            urllib.request.urlopen('http://169.254.169.254/latest/meta-data/', timeout=1)
+            return True
+        except:
+            pass
+        
+        # 방법 3: boto3 사용 가능 여부로 판단
+        try:
+            import boto3
+            boto3.Session().region_name  # AWS 환경에서만 작동
+            return True
+        except:
+            pass
+        
+        return False
     
     def switch_provider(self, app_instance, mysql_instance):
         """프로바이더 전환 로직"""
@@ -204,9 +260,8 @@ except Exception as e:
 app = Flask(__name__)
 app.secret_key = active_config['flask_secret']
 
-# Redis 세션 설정
+# Redis 세션 설정 (클라우드별 SSL 설정)
 app.config['SESSION_TYPE'] = 'redis'
-# GCP는 SSL 없이, AWS는 SSL 사용
 if active_config['provider'] == 'GCP':
     app.config['SESSION_REDIS'] = redis.StrictRedis(
         host=active_config['redis_host'], 
