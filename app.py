@@ -138,12 +138,13 @@ class CloudProvider:
         
         if running_on_aws:
             logger.info("Detected AWS environment, prioritizing AWS configuration")
-            # AWS 환경에서는 AWS 우선
+            # AWS 환경에서는 AWS만 시도 (GCP는 standby로 표시)
             if self.aws_available:
                 aws_config = self.get_aws_config()
                 if aws_config and self.test_database_connection(aws_config) and self.test_redis_connection(aws_config):
                     self.current_provider = 'AWS'
                     self.current_config = aws_config
+                    self.gcp_available = False  # GCP를 standby 상태로 설정
                     logger.info("Using AWS configuration")
                     return aws_config
                 else:
@@ -155,25 +156,27 @@ class CloudProvider:
         
         else:
             logger.info("Detected GCP environment, prioritizing GCP configuration")
-            # GCP 환경에서는 원래 로직대로
+            # GCP 환경에서는 GCP 우선, AWS는 standby
             if PREFERRED_CLOUD == 'GCP' and self.gcp_available:
                 gcp_config = self.get_gcp_config()
                 if gcp_config and self.test_database_connection(gcp_config) and self.test_redis_connection(gcp_config):
                     self.current_provider = 'GCP'
                     self.current_config = gcp_config
+                    # AWS를 standby 상태로 설정 (연결 테스트하지 않음)
+                    self.aws_available = True  # 대기 상태로 표시
                     logger.info("Using GCP configuration")
                     return gcp_config
                 else:
                     logger.warning("GCP health check failed, falling back to AWS")
                     self.gcp_available = False
             
-            # AWS 대체 시도
+            # GCP 실패 시에만 AWS 대체 시도
             if self.aws_available:
                 aws_config = self.get_aws_config()
                 if aws_config and self.test_database_connection(aws_config) and self.test_redis_connection(aws_config):
                     self.current_provider = 'AWS'
                     self.current_config = aws_config
-                    logger.info("Using AWS configuration")
+                    logger.info("Using AWS configuration (FAILOVER)")
                     return aws_config
                 else:
                     logger.error("AWS health check also failed")
