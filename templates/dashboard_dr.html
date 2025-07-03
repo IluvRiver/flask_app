@@ -56,7 +56,7 @@ function checkCloudStatus() {
             const message = `☁️ Cloud Provider Status\n\n` +
                            `Current Provider: ${data.current_provider}\n` +
                            `GCP Available: ${data.gcp_available ? '🟢 Online' : '🔴 Offline'}\n` +
-                           `AWS Available: ${data.aws_available ? '🟢 Online' : '🔴 Offline'}\n` +
+                           `AWS Available: ${data.aws_available ? '🟡 Standby' : '🔴 Offline'}\n` +
                            `Last Check: ${new Date(data.last_health_check * 1000).toLocaleString()}`;
             alert(message);
         })
